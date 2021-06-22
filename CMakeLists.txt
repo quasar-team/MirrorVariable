@@ -24,4 +24,4 @@ cmake_minimum_required( VERSION 3.0 )
 
 include_directories( include )
 
-add_library( MirrorVariable OBJECT src/MirrorVariables.cpp )
+add_library( MirrorVariable OBJECT src/MirrorVariableEngine.cpp )

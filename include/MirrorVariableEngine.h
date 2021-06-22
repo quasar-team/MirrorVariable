@@ -35,6 +35,12 @@ class ASNodeManager;
 
 typedef std::function<UaStatus(Session* pSession, const UaDataValue& dataValue, OpcUa_Boolean checkAccessLevel)> WriteToMirroredVariable;
 
+template<typename T>
+std::string toString(const T& t)
+{
+	return t.toFullString().toUtf8();
+}
+
 bool instantiateMirrorVariable(
     	    AddressSpace::ASNodeManager* nm,
 			AddressSpace::ChangeNotifyingVariable* mirroredVariable,

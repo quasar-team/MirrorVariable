@@ -27,26 +27,17 @@ namespace MirrorVariable
 class OnChangeHandler
 {
 public:
-	OnChangeHandler(AddressSpace::ChangeNotifyingVariable* mirroredVariable, WriteToMirroredVariable writeToMirroredVariable = WriteToMirroredVariable(/*empty*/))
+	OnChangeHandler(AddressSpace::ChangeNotifyingVariable* mirroredVariable, WriteToMirroredVariable writeToMirroredVariable)
 	  :m_mirroredVariable(mirroredVariable), m_writeToMirroredVariable(writeToMirroredVariable){};
 	virtual ~OnChangeHandler(){};
 
 	void operator()(AddressSpace::ChangeNotifyingVariable& fromWhere, const UaDataValue& newValue)
 	{
-		const auto currentValue = m_mirroredVariable->value(nullptr/* ? erm */);
-		if(currentValue != newValue)
+		const auto mirrorValue = m_mirroredVariable->value(nullptr);
+		if(mirrorValue != newValue)
 		{
-			// use specific handler if provided; otherwise just change value in AS layer
-			if(m_writeToMirroredVariable)
-			{
-				LOG(Log::TRC) << "MirroredNodeUpdater: updating (via handler) mirrored variable ["<<m_mirroredVariable->browseName().toFullString().toUtf8()<<"] from mirrored variable ["<<fromWhere.browseName().toFullString().toUtf8()<<"]";
-				m_writeToMirroredVariable(nullptr/* session ? */, newValue, OpcUa_False);
-			}
-			else
-			{
-				LOG(Log::TRC) << "MirroredNodeUpdater: updating (AS layer only) mirrored variable ["<<m_mirroredVariable->browseName().toFullString().toUtf8()<<"] from mirrored variable ["<<fromWhere.browseName().toFullString().toUtf8()<<"]";
-				m_mirroredVariable->setValue(nullptr/* session ? */, newValue, OpcUa_False);
-			}
+			LOG(Log::TRC) << "MirroredNodeUpdater: updating mirrored variable ["<<toString(m_mirroredVariable->browseName())<<"] from mirrored variable ["<<toString(fromWhere.browseName())<<"]";
+			m_writeToMirroredVariable(nullptr, newValue, OpcUa_True);
 		}
 		else
 		{
@@ -58,6 +49,38 @@ private:
 	WriteToMirroredVariable m_writeToMirroredVariable;
 };
 
+bool verifyParameters(AddressSpace::ASNodeManager* nm,
+	AddressSpace::ChangeNotifyingVariable* mirroredVariable,
+    UaNode* mirrorParent,
+	const std::string& mirrorVariableName)
+{
+	if(!nm)
+	{
+		LOG(Log::ERR) << "instantiateMirrorVariable called with null ASNodeManager; programming error - node manager is required, invalid";
+		return false;
+	}
+
+	if(!mirroredVariable)
+	{
+		LOG(Log::ERR) << "instantiateMirrorVariable called with null mirrored variable; programming error - need to know which variable is mirrored, invalid";
+		return false;
+	}
+
+	if(!mirrorParent)
+	{
+		LOG(Log::ERR) << "instantiateMirrorVariable called with null mirror parent; programming error - need to know where to attach mirror variable, invalid";
+		return false;
+	}
+
+	if(mirrorVariableName.empty())
+	{
+		LOG(Log::ERR) << "instantiateMirrorVariable called with empty mirror variable name; programming error - mirror variable needs a name, invalid";
+		return false;
+	}
+
+	return true;
+}
+
 bool instantiateMirrorVariable(
     AddressSpace::ASNodeManager* nm,
 	AddressSpace::ChangeNotifyingVariable* mirroredVariable,
@@ -66,12 +89,11 @@ bool instantiateMirrorVariable(
 	WriteToMirroredVariable writeToMirroredVariable)
 {
 	LOG(Log::INF) << __FUNCTION__ << " called, to add mirror variable ["<<mirrorVariableName<<"] to address space parent ["<<std::hex<<mirrorParent<<"] mirroring ["<<std::hex<<mirroredVariable<<"]"
-			<< " mirroring [id:"<<mirroredVariable->nodeId().toFullString().toUtf8()<<", name:"<<mirroredVariable->browseName().toFullString().toUtf8()<<"]"
-			<< " parent node [id:"<<mirrorParent->nodeId().toFullString().toUtf8()<<", name "<<mirrorParent->browseName().toFullString().toUtf8()<<"]"
+			<< " mirroring [id:"<<toString(mirroredVariable->nodeId())<<", name:"<<toString(mirroredVariable->browseName())<<"]"
+			<< " parent node [id:"<<toString(mirrorParent->nodeId())<<", name "<<toString(mirrorParent->browseName())<<"]"
 			<< " writeToMirroredVariable ["<<(writeToMirroredVariable? "OK" : "NULL!")<<"]";
 
-	// TODO... add checks
-	// 1. check all params are not NULL/empty etc.
+	if(!verifyParameters(nm, mirroredVariable, mirrorParent, mirrorVariableName)) return false;
 
 	const UaString mirrorVariableUaName(mirrorVariableName.c_str());
 	UaNodeId mirrorVariableNodeId = nm->makeChildNodeId(mirrorParent->nodeId(), mirrorVariableUaName);
@@ -86,23 +108,27 @@ bool instantiateMirrorVariable(
       OpcUa_AccessLevels_CurrentReadOrWrite,
       nm);
 
-    mirrorVariable->setValue(nullptr, mirroredVariable->value(nullptr/* ? erm */), OpcUa_False); // initial value
+    const auto initialValue = mirroredVariable->value(nullptr);
+    mirrorVariable->setValue(nullptr, initialValue, OpcUa_False);
+
     mirrorVariable->addChangeListener(OnChangeHandler(mirroredVariable, writeToMirroredVariable));
-    mirroredVariable->addChangeListener(OnChangeHandler(mirrorVariable));
+
+    WriteToMirroredVariable writeToMirrorVariable = [mirrorVariable](Session* s, const UaDataValue& v, OpcUa_Boolean l) {return mirrorVariable->setValue(s, v, l);};
+    mirroredVariable->addChangeListener(OnChangeHandler(mirrorVariable, writeToMirrorVariable));
 
     // add to address space
     UaStatus status = nm->addNodeAndReference( mirrorParent->nodeId(), mirrorVariable, OpcUaId_Organizes );
     if (!status.isGood())
     {
     	LOG(Log::ERR) << __FUNCTION__ << " failed to link mirror variable [" << mirrorVariableName << "]"
-    			<< " to parent node [id:"<<mirrorParent->nodeId().toFullString().toUtf8()<<", name "<<mirrorParent->browseName().toFullString().toUtf8()<<"]"
+    			<< " to parent node [id:"<<toString(mirrorParent->nodeId())<<", name "<<toString(mirrorParent->browseName())<<"]"
 				<< " status ["<<status.toString().toUtf8()<<"]";
     	return false;
     }
     else
     {
-    	LOG(Log::INF) << __FUNCTION__ << " added new mirror variable [ptr:"<<std::hex<<mirrorVariable<<", addr:"<< mirrorVariable->nodeId().toFullString().toUtf8() << "]"
-    			<< " to mirror existing variable [ptr:"<<std::hex<<mirroredVariable<<", addr:"<< mirroredVariable->nodeId().toFullString().toUtf8() <<"]";
+    	LOG(Log::INF) << __FUNCTION__ << " added new mirror variable [ptr:"<<std::hex<<mirrorVariable<<", addr:"<< toString(mirrorVariable->nodeId()) << "]"
+    			<< " to mirror existing variable [ptr:"<<std::hex<<mirroredVariable<<", addr:"<< toString(mirroredVariable->nodeId()) <<"]";
     	return true;
     }
 }
