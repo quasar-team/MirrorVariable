@@ -41,11 +41,17 @@ std::string toString(const T& t)
 	return t.toFullString().toUtf8();
 }
 
-bool instantiateMirrorVariable(
+bool instantiateReadOnlyMirrorVariable(
     	    AddressSpace::ASNodeManager* nm,
 			AddressSpace::ChangeNotifyingVariable* mirroredVariable,
     	    UaNode* mirrorParent,
-    		const std::string& mirrorNodeName,
+    		const std::string& mirrorVariableName);
+
+bool instantiateReadWriteMirrorVariable(
+    	    AddressSpace::ASNodeManager* nm,
+			AddressSpace::ChangeNotifyingVariable* mirroredVariable,
+    	    UaNode* mirrorParent,
+    		const std::string& mirrorVariableName,
 			WriteToMirroredVariable writeToMirroredVariable = WriteToMirroredVariable(/*empty*/));
 
 } /* namespace MirrorVariable */

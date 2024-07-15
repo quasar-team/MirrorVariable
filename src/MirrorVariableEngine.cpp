@@ -34,10 +34,11 @@ public:
 	void operator()(AddressSpace::ChangeNotifyingVariable& fromWhere, const UaDataValue& newValue)
 	{
 		const auto mirrorValue = m_mirroredVariable->value(nullptr);
+
 		if(mirrorValue != newValue)
 		{
-			LOG(Log::TRC) << "MirroredNodeUpdater: updating mirrored variable ["<<toString(m_mirroredVariable->browseName())<<"] from mirrored variable ["<<toString(fromWhere.browseName())<<"]";
-			m_writeToMirroredVariable(nullptr, newValue, OpcUa_True);
+			auto result = m_writeToMirroredVariable(nullptr, newValue, OpcUa_True);
+			LOG(Log::TRC) << "MirroredNodeUpdater: updated mirrored variable ["<<toString(m_mirroredVariable->browseName())<<"] result ["<<result.toString().toUtf8()<<"]";
 		}
 		else
 		{
@@ -81,7 +82,68 @@ bool verifyParameters(AddressSpace::ASNodeManager* nm,
 	return true;
 }
 
-bool instantiateMirrorVariable(
+bool addMirrorVariableToAddressSpace(
+			AddressSpace::ASNodeManager* nm, 
+			AddressSpace::ChangeNotifyingVariable* mirroredVariable, 
+			UaNode* mirrorParent, 
+			AddressSpace::ChangeNotifyingVariable* mirrorVariable)
+{
+    const UaStatus status = nm->addNodeAndReference( mirrorParent->nodeId(), mirrorVariable, OpcUaId_Organizes );
+    if (!status.isGood())
+    {
+    	LOG(Log::ERR) << __FUNCTION__ << " failed to link mirror variable [" << mirrorVariable->browseName() << "]"
+    			<< " to parent node [id:"<<toString(mirrorParent->nodeId())<<", name ["<<toString(mirrorParent->browseName())<<"]"
+				<< " status ["<<status.toString().toUtf8()<<"]";
+    	return false;
+    }
+    else
+    {
+    	LOG(Log::INF) << __FUNCTION__ << " added new mirror variable [ptr:"<<std::hex<<mirrorVariable<<", addr:"<< toString(mirrorVariable->nodeId()) << "]"
+    			<< " to mirror existing variable ["<<std::hex<<mirroredVariable<<", addr:"<< toString(mirroredVariable->nodeId()) <<"]";
+    	return true;
+    }
+}
+
+AddressSpace::ChangeNotifyingVariable* createMirrorVariable(
+			AddressSpace::ASNodeManager* nm,
+			AddressSpace::ChangeNotifyingVariable* mirroredVariable,
+			UaNode* mirrorParent,
+			const std::string& mirrorVariableName,
+			const OpcUa_Byte& accessLevel)
+{
+	const UaString mirrorVariableUaName(mirrorVariableName.c_str());
+	const UaNodeId mirrorVariableNodeId = nm->makeChildNodeId(mirrorParent->nodeId(), mirrorVariableUaName);
+	const UaVariant initialValue = *(mirroredVariable->value(nullptr).value());
+
+    return new AddressSpace::ChangeNotifyingVariable (
+      mirrorVariableNodeId,
+	  mirrorVariableUaName,
+      nm->getNameSpaceIndex(),
+	  initialValue,
+      accessLevel,
+      nm);
+}
+
+bool instantiateReadOnlyMirrorVariable(
+    	    AddressSpace::ASNodeManager* nm,
+			AddressSpace::ChangeNotifyingVariable* mirroredVariable,
+    	    UaNode* mirrorParent,
+    		const std::string& mirrorVariableName)
+{
+	LOG(Log::INF) << __FUNCTION__ << " called, to add mirror variable ["<<mirrorVariableName<<"] to address space parent ["<<std::hex<<mirrorParent<<"] mirroring ["<<std::hex<<mirroredVariable<<"]"
+			<< " mirroring [id:"<<toString(mirroredVariable->nodeId())<<", name["<<toString(mirroredVariable->browseName())<<"]"
+			<< " parent node [id:"<<toString(mirrorParent->nodeId())<<", name ["<<toString(mirrorParent->browseName())<<"]";
+
+	if(!verifyParameters(nm, mirroredVariable, mirrorParent, mirrorVariableName)) return false;
+    AddressSpace::ChangeNotifyingVariable* mirrorVariable = createMirrorVariable(nm, mirroredVariable, mirrorParent, mirrorVariableName, OpcUa_AccessLevels_CurrentRead);
+
+	WriteToMirroredVariable writeToMirrorVariable = [mirrorVariable](Session* s, const UaDataValue& v, OpcUa_Boolean l) {return mirrorVariable->setValue(s, v, OpcUa_False);};
+    mirroredVariable->addChangeListener(OnChangeHandler(mirrorVariable, writeToMirrorVariable));
+
+	return addMirrorVariableToAddressSpace(nm, mirroredVariable, mirrorParent, mirrorVariable);
+}
+
+bool instantiateReadWriteMirrorVariable(
     AddressSpace::ASNodeManager* nm,
 	AddressSpace::ChangeNotifyingVariable* mirroredVariable,
     UaNode* mirrorParent,
@@ -89,48 +151,18 @@ bool instantiateMirrorVariable(
 	WriteToMirroredVariable writeToMirroredVariable)
 {
 	LOG(Log::INF) << __FUNCTION__ << " called, to add mirror variable ["<<mirrorVariableName<<"] to address space parent ["<<std::hex<<mirrorParent<<"] mirroring ["<<std::hex<<mirroredVariable<<"]"
-			<< " mirroring [id:"<<toString(mirroredVariable->nodeId())<<", name:"<<toString(mirroredVariable->browseName())<<"]"
-			<< " parent node [id:"<<toString(mirrorParent->nodeId())<<", name "<<toString(mirrorParent->browseName())<<"]"
+			<< " mirroring [id:"<<toString(mirroredVariable->nodeId())<<", name["<<toString(mirroredVariable->browseName())<<"]"
+			<< " parent node [id:"<<toString(mirrorParent->nodeId())<<", name ["<<toString(mirrorParent->browseName())<<"]"
 			<< " writeToMirroredVariable ["<<(writeToMirroredVariable? "OK" : "NULL!")<<"]";
 
 	if(!verifyParameters(nm, mirroredVariable, mirrorParent, mirrorVariableName)) return false;
+	AddressSpace::ChangeNotifyingVariable* mirrorVariable = createMirrorVariable(nm, mirroredVariable, mirrorParent, mirrorVariableName, OpcUa_AccessLevels_CurrentReadOrWrite);
 
-	const UaString mirrorVariableUaName(mirrorVariableName.c_str());
-	UaNodeId mirrorVariableNodeId = nm->makeChildNodeId(mirrorParent->nodeId(), mirrorVariableUaName);
-
-    LOG(Log::INF) << __FUNCTION__ << " mirrored node class ["<<mirroredVariable->nodeClass()<<"]";
-
-    AddressSpace::ChangeNotifyingVariable* mirrorVariable = new AddressSpace::ChangeNotifyingVariable (
-      mirrorVariableNodeId,
-	  mirrorVariableUaName,
-      nm->getNameSpaceIndex(),
-	  UaVariant(),
-      OpcUa_AccessLevels_CurrentReadOrWrite,
-      nm);
-
-    const auto initialValue = mirroredVariable->value(nullptr);
-    mirrorVariable->setValue(nullptr, initialValue, OpcUa_False);
-
-    mirrorVariable->addChangeListener(OnChangeHandler(mirroredVariable, writeToMirroredVariable));
-
-    WriteToMirroredVariable writeToMirrorVariable = [mirrorVariable](Session* s, const UaDataValue& v, OpcUa_Boolean l) {return mirrorVariable->setValue(s, v, l);};
+    mirrorVariable->addChangeListener(OnChangeHandler(mirroredVariable, writeToMirroredVariable)); // handle write to mirror (send to mirrored)
+	WriteToMirroredVariable writeToMirrorVariable = [mirrorVariable](Session* s, const UaDataValue& v, OpcUa_Boolean l) {return mirrorVariable->setValue(s, v, l);};
     mirroredVariable->addChangeListener(OnChangeHandler(mirrorVariable, writeToMirrorVariable));
 
-    // add to address space
-    UaStatus status = nm->addNodeAndReference( mirrorParent->nodeId(), mirrorVariable, OpcUaId_Organizes );
-    if (!status.isGood())
-    {
-    	LOG(Log::ERR) << __FUNCTION__ << " failed to link mirror variable [" << mirrorVariableName << "]"
-    			<< " to parent node [id:"<<toString(mirrorParent->nodeId())<<", name "<<toString(mirrorParent->browseName())<<"]"
-				<< " status ["<<status.toString().toUtf8()<<"]";
-    	return false;
-    }
-    else
-    {
-    	LOG(Log::INF) << __FUNCTION__ << " added new mirror variable [ptr:"<<std::hex<<mirrorVariable<<", addr:"<< toString(mirrorVariable->nodeId()) << "]"
-    			<< " to mirror existing variable [ptr:"<<std::hex<<mirroredVariable<<", addr:"<< toString(mirroredVariable->nodeId()) <<"]";
-    	return true;
-    }
+    return addMirrorVariableToAddressSpace(nm, mirroredVariable, mirrorParent, mirrorVariable);
 }
 
 } /* namespace MirrorVariable */
