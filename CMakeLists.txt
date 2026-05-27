@@ -20,7 +20,7 @@
 message( STATUS "Building MirrorVariable" )
 
 project( MirrorVariable CXX )
-cmake_minimum_required( VERSION 3.0 )
+cmake_minimum_required( VERSION 3.26 )
 
 include_directories( include )
 
